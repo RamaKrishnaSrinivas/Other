@@ -1,34 +1,25 @@
 import os
-from flask import Flask, render_template, request, redirect, session, url_for
+from flask import Flask, render_template_string, request, redirect, session, url_for
 import psycopg2
 from urllib.parse import urlparse
 
 app = Flask(__name__)
+app.secret_key = os.environ.get('SECRET_KEY', 'your_default_secret_key')
 
-
-# Get database URL from environment variable
+# Database URL and Owner credentials from environment variables
 DATABASE_URL = os.environ.get('DATABASE_URL')
-
-# Owner credentials (for owner login and dashboard access)
 OWNER_EMAIL = os.environ.get('OWNER_EMAIL', 'owner@example.com')
 OWNER_PASS = os.environ.get('OWNER_PASS', 'ownerpassword')
 
 def get_db_connection():
-    # Parse the database URL because psycopg2 requires components separately
     result = urlparse(DATABASE_URL)
-    username = result.username
-    password = result.password
-    database = result.path[1:]
-    hostname = result.hostname
-    port = result.port
-    conn = psycopg2.connect(
-        database=database,
-        user=username,
-        password=password,
-        host=hostname,
-        port=port
+    return psycopg2.connect(
+        database=result.path[1:],
+        user=result.username,
+        password=result.password,
+        host=result.hostname,
+        port=result.port
     )
-    return conn
 
 def create_table():
     conn = get_db_connection()
@@ -50,8 +41,14 @@ create_table()
 
 @app.route('/')
 def home():
-    return redirect('/login')  # Redirect visitors
-    
+    # Redirect to login or user/owner dashboard if logged in
+    if session.get('owner'):
+        return redirect('/dashboard')
+    elif session.get('user'):
+        return redirect('/user')
+    else:
+        return redirect('/login')
+
 @app.route('/register', methods=['GET', 'POST'])
 def register():
     msg = ''
@@ -71,7 +68,8 @@ def register():
             return redirect('/login')
         except Exception:
             msg = "Registration failed. Email may already exist."
-    return '''
+    # Basic HTML form for registration
+    return render_template_string('''
         <form method="post">
             Name: <input name="name" required><br>
             DOB: <input name="dob" type="date" required><br>
@@ -79,9 +77,9 @@ def register():
             Password: <input name="password" type="password" required><br>
             <button type="submit">Register</button>
         </form>
-        <p>{}</p>
+        <p>{{ msg }}</p>
         <a href="/login">Login</a>
-    '''.format(msg)
+    ''', msg=msg)
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -90,50 +88,63 @@ def login():
         email = request.form['email']
         password = request.form['password']
         if email == OWNER_EMAIL and password == OWNER_PASS:
+            session.clear()
             session['owner'] = True
-            return redirect(url_for('dashboard'))
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute("SELECT id FROM users WHERE email=%s AND password=%s", (email, password))
-        user = cur.fetchone()
-        cur.close()
-        conn.close()
-        if user:
-            session['user'] = user[0]
-            return "Login successful! <a href='/logout'>Logout</a>"
+            return redirect('/dashboard')
         else:
-            msg = "Incorrect credentials."
-    return '''
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute("SELECT id FROM users WHERE email=%s AND password=%s", (email, password))
+            user = cur.fetchone()
+            cur.close()
+            conn.close()
+            if user:
+                session.clear()
+                session['user'] = user[0]
+                return redirect('/user')
+            else:
+                msg = "Incorrect credentials."
+    return render_template_string('''
         <form method="post">
             Email: <input name="email" type="email" required><br>
             Password: <input name="password" type="password" required><br>
             <button type="submit">Login</button>
         </form>
-        <p>{}</p>
+        <p>{{ msg }}</p>
         <a href="/register">Register</a>
-    '''.format(msg)
+    ''', msg=msg)
 
 @app.route('/dashboard')
 def dashboard():
     if not session.get('owner'):
-        return redirect(url_for('login'))
+        return redirect('/login')
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute("SELECT name, dob, email FROM users")
     users = cur.fetchall()
     cur.close()
     conn.close()
-    user_list = '<ul>' + ''.join(['<li>{} | {} | {}</li>'.format(u[0], u[1], u[2]) for u in users]) + '</ul>'
-    return '''
-        <h2>Registered Users</h2>
-        {}
+    users_html = '<ul>' + ''.join(f'<li>{u[0]} | {u[1]} | {u[2]}</li>' for u in users) + '</ul>'
+    return f'''
+        <h2>Owner Dashboard - Registered Users</h2>
+        {users_html}
         <a href="/logout">Logout</a>
-    '''.format(user_list)
+    '''
+
+@app.route('/user')
+def user_home():
+    if not session.get('user'):
+        return redirect('/login')
+    return '''
+        <h2>User Home Page</h2>
+        <p>Welcome, user!</p>
+        <a href="/logout">Logout</a>
+    '''
 
 @app.route('/logout')
 def logout():
     session.clear()
-    return redirect(url_for('login'))
+    return redirect('/login')
 
 if __name__ == '__main__':
-    app.run(debug=False)  # For production, disable debug modebug=True)
+    app.run(debug=False)
