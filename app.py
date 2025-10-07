@@ -1,21 +1,41 @@
+import os
 from flask import Flask, render_template, request, redirect, session, url_for
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 import psycopg2
-import os
+from urllib.parse import urlparse
 
 app = Flask(__name__)
-app.secret_key = 'your_secret_key'  # Replace with a strong secret
+
+# Load secret key from environment variable or fallback to a default (change for production)
+app.secret_key = os.environ.get('SECRET_KEY', 'your_default_secret_key')
+
+# Set up Flask-Limiter for login rate limiting
 limiter = Limiter(app, key_func=get_remote_address)
 
-# Configure your database here
-DATABASE_URL = os.getenv("DATABASE_URL") or "dbname=flask_db user=postgres password=root host=localhost port=5432"
+# Get database URL from environment variable
+DATABASE_URL = os.environ.get('DATABASE_URL')
 
-OWNER_EMAIL = 'owner@example.com'
-OWNER_PASS = 'ownerpassword'
+# Owner credentials (for owner login and dashboard access)
+OWNER_EMAIL = os.environ.get('OWNER_EMAIL', 'owner@example.com')
+OWNER_PASS = os.environ.get('OWNER_PASS', 'ownerpassword')
 
 def get_db_connection():
-    return psycopg2.connect(DATABASE_URL)
+    # Parse the database URL because psycopg2 requires components separately
+    result = urlparse(DATABASE_URL)
+    username = result.username
+    password = result.password
+    database = result.path[1:]
+    hostname = result.hostname
+    port = result.port
+    conn = psycopg2.connect(
+        database=database,
+        user=username,
+        password=password,
+        host=hostname,
+        port=port
+    )
+    return conn
 
 def create_table():
     conn = get_db_connection()
@@ -52,7 +72,7 @@ def register():
             cur.close()
             conn.close()
             return redirect('/login')
-        except Exception as e:
+        except Exception:
             msg = "Registration failed. Email may already exist."
     return '''
         <form method="post">
@@ -113,6 +133,14 @@ def dashboard():
         {}
         <a href="/logout">Logout</a>
     '''.format(user_list)
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect(url_for('login'))
+
+if __name__ == '__main__':
+    app.run(debug=False)  # For production, disable debug mode    '''.format(user_list)
 
 @app.route('/logout')
 def logout():
