@@ -48,6 +48,10 @@ def create_table():
 
 create_table()
 
+@app.route('/')
+def home():
+    return redirect('/login')  # Redirect visitors
+    
 @app.route('/register', methods=['GET', 'POST'])
 def register():
     msg = ''
