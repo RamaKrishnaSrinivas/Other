@@ -14,7 +14,7 @@ app.secret_key = os.environ.get('SECRET_KEY', 'your_default_secret_key')
 limiter = Limiter(
     app,
     key_func=get_remote_address
-))
+)
 
 # Get database URL from environment variable
 DATABASE_URL = os.environ.get('DATABASE_URL')
