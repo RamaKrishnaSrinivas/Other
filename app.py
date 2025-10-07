@@ -1,20 +1,10 @@
 import os
 from flask import Flask, render_template, request, redirect, session, url_for
-from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
 import psycopg2
 from urllib.parse import urlparse
 
 app = Flask(__name__)
 
-# Load secret key from environment variable or fallback to a default (change for production)
-app.secret_key = os.environ.get('SECRET_KEY', 'your_default_secret_key')
-
-# Set up Flask-Limiter for login rate limiting
-limiter = Limiter(
-    app,
-    key_func=get_remote_address
-)
 
 # Get database URL from environment variable
 DATABASE_URL = os.environ.get('DATABASE_URL')
@@ -90,7 +80,6 @@ def register():
     '''.format(msg)
 
 @app.route('/login', methods=['GET', 'POST'])
-@limiter.limit("5 per minute")
 def login():
     msg = ''
     if request.method == 'POST':
