@@ -1,16 +1,15 @@
 import os
-from flask import Flask, render_template_string, request, redirect, url_for, flash, session
+import csv
+from flask import Flask, render_template_string, request, redirect, url_for, flash, session, Response
 from flask_bcrypt import Bcrypt
 import psycopg2
+import urllib.parse as up
 from dotenv import load_dotenv
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
 # ---------------- Load environment variables ----------------
 load_dotenv()
-
-# Secret key for printing users in terminal
-OWNER_DOWNLOAD_KEY = os.getenv("OWNER_DOWNLOAD_KEY", "skro@0513")
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'fallback_secret_key')
@@ -23,36 +22,30 @@ limiter = Limiter(
     storage_uri="memory://",  # Or Redis/Memcached for production
 )
 
-# ---------------- PostgreSQL settings ----------------
-DB_HOST = os.getenv('DB_HOST', '127.0.0.1')
-DB_NAME = os.getenv('DB_NAME', 'oruganti_db')
-DB_USER = os.getenv('DB_USER', 'postgres')
-DB_PASSWORD = os.getenv('DB_PASSWORD', 'skro@0513')
-DB_PORT = os.getenv('DB_PORT', 5432)
+# ---------------- Database URL ----------------
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    "postgresql://oruganti_01wi_user:m3CXA5cRcgA7iIZJhnByQSzszqK538Fv@dpg-d3ihh32dbo4c73fobeeg-a.oregon-postgres.render.com/oruganti_01wi"
+)
 
+OWNER_DOWNLOAD_KEY = os.getenv("OWNER_DOWNLOAD_KEY", "skro@0513")
 
 # ---------------- Database connection ----------------
 def connect_to_db():
     try:
-        return psycopg2.connect(
-            host=DB_HOST,
-            database=DB_NAME,
-            user=DB_USER,
-            password=DB_PASSWORD,
-            port=DB_PORT
+        up.uses_netloc.append("postgres")
+        url = up.urlparse(DATABASE_URL)
+        conn = psycopg2.connect(
+            database=url.path[1:],
+            user=url.username,
+            password=url.password,
+            host=url.hostname,
+            port=url.port
         )
+        return conn
     except psycopg2.Error as e:
         print(f"Error connecting to DB: {e}")
         return None
-conn = connect_to_db()
-if conn:
-    cur = conn.cursor()
-    cur.execute("SELECT id, name, dob, email FROM users")
-    users = cur.fetchall()
-    print("----- All Users -----")
-    for u in users:
-        print(u)
-    conn.close()
 
 # ---------------- Create users table ----------------
 def create_table():
@@ -184,7 +177,7 @@ def register():
     )
 
 @app.route('/login', methods=['GET', 'POST'])
-@limiter.limit("5 per day")
+@limiter.limit("6 per day")
 def login():
     fields = [
         {"label": "Email", "type": "email", "name": "email", "required": True},
@@ -226,7 +219,7 @@ def logout():
     flash("Logged out successfully", "green")
     return redirect(url_for('login'))
 
-# ---------------- Owner route to print users in terminal ----------------
+# ---------------- Owner route: print users in terminal ----------------
 @app.route('/print_users')
 def print_users():
     secret = request.args.get('secret')
@@ -241,16 +234,34 @@ def print_users():
     try:
         cur.execute("SELECT id, name, dob, email FROM users")
         users = cur.fetchall()
-
-        print("\n------ USERS DATA ------")
+        print("\n----- All Users -----")
         for u in users:
             print(f"ID: {u[0]}, Name: {u[1]}, DOB: {u[2]}, Email: {u[3]}")
-        print("------------------------\n")
+        print("--------------------\n")
+        return "Users printed in server terminal successfully!"
+    finally:
+        conn.close()
 
-        return "Users printed in VS Code terminal successfully!"
+# ---------------- Owner route: delete all users ----------------
+@app.route('/delete_users')
+def delete_users():
+    secret = request.args.get('secret')
+    if secret != OWNER_DOWNLOAD_KEY:
+        return "Access denied!", 403
+
+    conn = connect_to_db()
+    if not conn:
+        return "Database connection error!", 500
+
+    cur = conn.cursor()
+    try:
+        cur.execute("DELETE FROM users")
+        conn.commit()
+        return "All users deleted successfully!"
     finally:
         conn.close()
 
 # ---------------- Run App ----------------
 if __name__ == '__main__':
-    app.run(debug=False, host='0.0.0.0', port=5000)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(debug=False, host='0.0.0.0', port=port)
