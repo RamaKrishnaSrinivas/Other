@@ -3,3 +3,4 @@ Flask-Bcrypt
 psycopg2-binary
 python-dotenv
 Flask-Limiter
+gunicorn
