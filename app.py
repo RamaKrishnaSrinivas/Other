@@ -1,150 +1,256 @@
 import os
-from flask import Flask, render_template_string, request, redirect, session, url_for
+from flask import Flask, render_template_string, request, redirect, url_for, flash, session
+from flask_bcrypt import Bcrypt
 import psycopg2
-from urllib.parse import urlparse
+from dotenv import load_dotenv
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+
+# ---------------- Load environment variables ----------------
+load_dotenv()
+
+# Secret key for printing users in terminal
+OWNER_DOWNLOAD_KEY = os.getenv("OWNER_DOWNLOAD_KEY", "skro@0513")
 
 app = Flask(__name__)
-app.secret_key = os.environ.get('SECRET_KEY', 'your_default_secret_key')
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'fallback_secret_key')
+bcrypt = Bcrypt(app)
 
-# Database URL and Owner credentials from environment variables
-DATABASE_URL = os.environ.get('DATABASE_URL')
-OWNER_EMAIL = os.environ.get('OWNER_EMAIL', 'owner@example.com')
-OWNER_PASS = os.environ.get('OWNER_PASS', 'ownerpassword')
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    default_limits=["5 per day"],
+    storage_uri="memory://",  # Or Redis/Memcached for production
+)
 
-def get_db_connection():
-    result = urlparse(DATABASE_URL)
-    return psycopg2.connect(
-        database=result.path[1:],
-        user=result.username,
-        password=result.password,
-        host=result.hostname,
-        port=result.port
-    )
+# ---------------- PostgreSQL settings ----------------
+DB_HOST = os.getenv('DB_HOST', '127.0.0.1')
+DB_NAME = os.getenv('DB_NAME', 'oruganti_db')
+DB_USER = os.getenv('DB_USER', 'postgres')
+DB_PASSWORD = os.getenv('DB_PASSWORD', 'skro@0513')
+DB_PORT = os.getenv('DB_PORT', 5432)
 
-def create_table():
-    conn = get_db_connection()
+
+# ---------------- Database connection ----------------
+def connect_to_db():
+    try:
+        return psycopg2.connect(
+            host=DB_HOST,
+            database=DB_NAME,
+            user=DB_USER,
+            password=DB_PASSWORD,
+            port=DB_PORT
+        )
+    except psycopg2.Error as e:
+        print(f"Error connecting to DB: {e}")
+        return None
+conn = connect_to_db()
+if conn:
     cur = conn.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS users (
-            id SERIAL PRIMARY KEY,
-            name TEXT NOT NULL,
-            dob DATE NOT NULL,
-            email TEXT UNIQUE NOT NULL,
-            password TEXT NOT NULL
-        );
-    """)
-    conn.commit()
-    cur.close()
+    cur.execute("SELECT id, name, dob, email FROM users")
+    users = cur.fetchall()
+    print("----- All Users -----")
+    for u in users:
+        print(u)
     conn.close()
+
+# ---------------- Create users table ----------------
+def create_table():
+    conn = connect_to_db()
+    if conn:
+        cur = conn.cursor()
+        try:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS users (
+                    id SERIAL PRIMARY KEY,
+                    name VARCHAR(255) NOT NULL,
+                    dob DATE NOT NULL,
+                    email VARCHAR(255) UNIQUE NOT NULL,
+                    password VARCHAR(255) NOT NULL
+                )
+            """)
+            conn.commit()
+        finally:
+            conn.close()
 
 create_table()
 
+# ---------------- Basic CSS ----------------
+base_style = """
+<style>
+body { font-family: Arial, sans-serif; background: #f0f2f5; margin:0; padding:0; }
+.container { width: 350px; margin: 50px auto; background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+h1 { text-align: center; color: #333; }
+label { display: block; margin-top: 10px; color: #555; }
+input[type=text], input[type=email], input[type=password], input[type=date] {
+    width: 100%; padding: 8px; margin-top: 5px; border-radius: 4px; border: 1px solid #ccc;
+}
+input[type=submit] { width: 100%; padding: 10px; margin-top: 15px; background: #4CAF50; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
+input[type=submit]:hover { background: #45a049; }
+ul { list-style-type: none; padding: 0; }
+li { margin: 5px 0; color: red; text-align: center; }
+a { color: #4CAF50; text-decoration: none; }
+a:hover { text-decoration: underline; }
+nav ul { text-align: center; }
+nav ul li { display: inline; margin: 0 10px; }
+</style>
+"""
+
+# ---------------- Templates ----------------
+index_template = base_style + """
+<div class="container">
+    <nav>
+        <ul>
+            <li><a href="{{ url_for('register') }}">Register</a></li>
+            <li><a href="{{ url_for('login') }}">Login</a></li>
+        </ul>
+    </nav>
+    <h1>Welcome</h1>
+</div>
+"""
+
+form_template = base_style + """
+<div class="container">
+    <h1>{{ title }}</h1>
+    <form method="POST">
+        {% for field in fields %}
+            <label>{{ field.label }}</label>
+            <input type="{{ field.type }}" name="{{ field.name }}" {% if field.required %}required{% endif %}>
+        {% endfor %}
+        <input type="submit" value="{{ button }}">
+    </form>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <ul>
+        {% for category, message in messages %}
+          <li>{{ message }}</li>
+        {% endfor %}
+        </ul>
+      {% endif %}
+    {% endwith %}
+    {% if extra_link %}
+        <p style="text-align:center; margin-top:10px;"><a href="{{ extra_link.url }}">{{ extra_link.text }}</a></p>
+    {% endif %}
+</div>
+"""
+
+dashboard_template = base_style + """
+<div class="container">
+    <h1>Dashboard</h1>
+    <p>Welcome, {{ session['user'] }}!</p>
+    <p style="text-align:center;"><a href="{{ url_for('logout') }}">Logout</a></p>
+</div>
+"""
+
+# ---------------- Routes ----------------
 @app.route('/')
-def home():
-    # Redirect to login or user/owner dashboard if logged in
-    if session.get('owner'):
-        return redirect('/dashboard')
-    elif session.get('user'):
-        return redirect('/user')
-    else:
-        return redirect('/login')
+def index():
+    return render_template_string(index_template)
 
 @app.route('/register', methods=['GET', 'POST'])
 def register():
-    msg = ''
+    fields = [
+        {"label": "Name", "type": "text", "name": "name", "required": True},
+        {"label": "Date of Birth", "type": "date", "name": "dob", "required": True},
+        {"label": "Email", "type": "email", "name": "email", "required": True},
+        {"label": "Password", "type": "password", "name": "password", "required": True}
+    ]
     if request.method == 'POST':
         name = request.form['name']
         dob = request.form['dob']
         email = request.form['email']
         password = request.form['password']
-        try:
-            conn = get_db_connection()
+        hashed_password = bcrypt.generate_password_hash(password).decode('utf-8')
+
+        conn = connect_to_db()
+        if conn:
             cur = conn.cursor()
-            cur.execute("INSERT INTO users (name, dob, email, password) VALUES (%s, %s, %s, %s)",
-                        (name, dob, email, password))
-            conn.commit()
-            cur.close()
-            conn.close()
-            return redirect('/login')
-        except Exception:
-            msg = "Registration failed. Email may already exist."
-    # Basic HTML form for registration
-    return render_template_string('''
-        <form method="post">
-            Name: <input name="name" required><br>
-            DOB: <input name="dob" type="date" required><br>
-            Email: <input name="email" type="email" required><br>
-            Password: <input name="password" type="password" required><br>
-            <button type="submit">Register</button>
-        </form>
-        <p>{{ msg }}</p>
-        <a href="/login">Login</a>
-    ''', msg=msg)
+            try:
+                cur.execute(
+                    "INSERT INTO users (name, dob, email, password) VALUES (%s,%s,%s,%s)",
+                    (name, dob, email, hashed_password)
+                )
+                conn.commit()
+                flash("Registration successful!", "green")
+                return redirect(url_for('login'))
+            except psycopg2.Error:
+                flash("Email already exists or DB error!", "red")
+            finally:
+                conn.close()
+
+    return render_template_string(
+        form_template, title="Register", fields=fields, button="Register",
+        extra_link={"url": url_for('login'), "text": "Already have an account? Login"}
+    )
 
 @app.route('/login', methods=['GET', 'POST'])
+@limiter.limit("5 per day")
 def login():
-    msg = ''
+    fields = [
+        {"label": "Email", "type": "email", "name": "email", "required": True},
+        {"label": "Password", "type": "password", "name": "password", "required": True}
+    ]
     if request.method == 'POST':
         email = request.form['email']
         password = request.form['password']
-        if email == OWNER_EMAIL and password == OWNER_PASS:
-            session.clear()
-            session['owner'] = True
-            return redirect('/dashboard')
-        else:
-            conn = get_db_connection()
+
+        conn = connect_to_db()
+        if conn:
             cur = conn.cursor()
-            cur.execute("SELECT id FROM users WHERE email=%s AND password=%s", (email, password))
-            user = cur.fetchone()
-            cur.close()
-            conn.close()
-            if user:
-                session.clear()
-                session['user'] = user[0]
-                return redirect('/user')
-            else:
-                msg = "Incorrect credentials."
-    return render_template_string('''
-        <form method="post">
-            Email: <input name="email" type="email" required><br>
-            Password: <input name="password" type="password" required><br>
-            <button type="submit">Login</button>
-        </form>
-        <p>{{ msg }}</p>
-        <a href="/register">Register</a>
-    ''', msg=msg)
+            try:
+                cur.execute("SELECT * FROM users WHERE email=%s", (email,))
+                user = cur.fetchone()
+                if user and bcrypt.check_password_hash(user[4], password):
+                    session['user'] = user[1]
+                    return redirect(url_for('dashboard'))
+                else:
+                    flash("Invalid email or password", "red")
+            finally:
+                conn.close()
+
+    return render_template_string(
+        form_template, title="Login", fields=fields, button="Login",
+        extra_link={"url": url_for('register'), "text": "No account? Register"}
+    )
 
 @app.route('/dashboard')
 def dashboard():
-    if not session.get('owner'):
-        return redirect('/login')
-    conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute("SELECT name, dob, email FROM users")
-    users = cur.fetchall()
-    cur.close()
-    conn.close()
-    users_html = '<ul>' + ''.join(f'<li>{u[0]} | {u[1]} | {u[2]}</li>' for u in users) + '</ul>'
-    return f'''
-        <h2>Owner Dashboard - Registered Users</h2>
-        {users_html}
-        <a href="/logout">Logout</a>
-    '''
-
-@app.route('/user')
-def user_home():
-    if not session.get('user'):
-        return redirect('/login')
-    return '''
-        <h2>User Home Page</h2>
-        <p>Welcome, user!</p>
-        <a href="/logout">Logout</a>
-    '''
+    if 'user' not in session:
+        flash("Login first", "red")
+        return redirect(url_for('login'))
+    return render_template_string(dashboard_template)
 
 @app.route('/logout')
 def logout():
     session.clear()
-    return redirect('/login')
+    flash("Logged out successfully", "green")
+    return redirect(url_for('login'))
 
+# ---------------- Owner route to print users in terminal ----------------
+@app.route('/print_users')
+def print_users():
+    secret = request.args.get('secret')
+    if secret != OWNER_DOWNLOAD_KEY:
+        return "Access denied!", 403
+
+    conn = connect_to_db()
+    if not conn:
+        return "Database connection error!", 500
+
+    cur = conn.cursor()
+    try:
+        cur.execute("SELECT id, name, dob, email FROM users")
+        users = cur.fetchall()
+
+        print("\n------ USERS DATA ------")
+        for u in users:
+            print(f"ID: {u[0]}, Name: {u[1]}, DOB: {u[2]}, Email: {u[3]}")
+        print("------------------------\n")
+
+        return "Users printed in VS Code terminal successfully!"
+    finally:
+        conn.close()
+
+# ---------------- Run App ----------------
 if __name__ == '__main__':
-    app.run(debug=False)
+    app.run(debug=False, host='0.0.0.0', port=5000)
