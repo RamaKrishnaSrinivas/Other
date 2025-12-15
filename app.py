@@ -18,7 +18,7 @@ bcrypt = Bcrypt(app)
 limiter = Limiter(
     get_remote_address,
     app=app,
-    default_limits=["5 per day"],
+    default_limits=["5 per minute"],
     storage_uri="memory://",  # Or Redis/Memcached for production
 )
 
@@ -177,7 +177,7 @@ def register():
     )
 
 @app.route('/login', methods=['GET', 'POST'])
-@limiter.limit("6 per day")
+@limiter.limit("5 per minute")
 def login():
     fields = [
         {"label": "Email", "type": "email", "name": "email", "required": True},
